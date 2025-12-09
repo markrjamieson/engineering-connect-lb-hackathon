@@ -27,30 +27,23 @@ echo -e "${YELLOW}Mock target 3 started on port 8083 (PID: $MOCK3_PID)${NC}"
 # Wait a moment for servers to start
 sleep 2
 
-# Set up environment variables for load balancer
-export LISTENER_PORT=8080
-export CONNECTION_TIMEOUT=5000
-export LOAD_BALANCING_ALGORITHM=ROUND_ROBIN
-
-# Target Group 1: Multiple targets
-export TARGET_GROUP_1_NAME=backend
-export TARGET_GROUP_1_TARGETS=127.0.0.1:8081,127.0.0.1:8082,127.0.0.1:8083
-
-# Listener Rule 1: Root path
-export LISTENER_RULE_1_PATH_PREFIX=/
-export LISTENER_RULE_1_PATH_REWRITE=
-export LISTENER_RULE_1_TARGET_GROUP=backend
-
-echo -e "${GREEN}Starting load balancer on port 8080...${NC}"
-echo -e "${YELLOW}Press Ctrl+C to stop all servers${NC}"
+echo -e "${GREEN}All mock target servers started.${NC}"
+echo -e "${YELLOW}Load balancer should be running in a container.${NC}"
+echo -e "${YELLOW}Press Ctrl+C to stop all mock servers${NC}"
 echo ""
 
-# Start load balancer (this will block)
-python app.py
+# Cleanup function to kill mock servers
+cleanup() {
+    echo -e "\n${RED}Stopping mock target servers...${NC}"
+    kill $MOCK1_PID $MOCK2_PID $MOCK3_PID 2>/dev/null
+    wait $MOCK1_PID $MOCK2_PID $MOCK3_PID 2>/dev/null
+    echo -e "${GREEN}All servers stopped.${NC}"
+    exit 0
+}
 
-# Cleanup: Kill mock servers when load balancer stops
-echo -e "\n${RED}Stopping mock target servers...${NC}"
-kill $MOCK1_PID $MOCK2_PID $MOCK3_PID 2>/dev/null
-wait $MOCK1_PID $MOCK2_PID $MOCK3_PID 2>/dev/null
-echo -e "${GREEN}All servers stopped.${NC}"
+# Set up trap to call cleanup on script exit or interrupt
+trap cleanup EXIT INT TERM
+
+# Keep script running until interrupted
+wait
 

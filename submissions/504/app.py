@@ -14,7 +14,7 @@ app = Flask(__name__)
 config = Config()
 load_balancer = LoadBalancer(config)
 
-
+# REVIEW: Unsure if we need to be able to handle anymore methods than GET. If we remove the methods, then default is GET.
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 def proxy(path):
