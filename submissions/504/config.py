@@ -16,6 +16,7 @@ class Config:
         self.listener_port = int(os.getenv('LISTENER_PORT', '8080'))
         self.connection_timeout = int(os.getenv('CONNECTION_TIMEOUT', '5000')) / 1000.0  # Convert ms to seconds
         self.load_balancing_algorithm = os.getenv('LOAD_BALANCING_ALGORITHM', 'ROUND_ROBIN')
+        self.header_convention_enable = os.getenv('HEADER_CONVENTION_ENABLE', 'false').lower() == 'true'
         
         # Parse listener rules
         self.listener_rules = self._parse_listener_rules()
@@ -34,6 +35,10 @@ class Config:
     def get_load_balancing_algorithm(self) -> str:
         """Get the load balancing algorithm."""
         return self.load_balancing_algorithm
+
+    def get_header_convention_enable(self) -> bool:
+        """Return whether to add convention headers (e.g., X-Forwarded-*)."""
+        return self.header_convention_enable
     
     def _parse_listener_rules(self) -> List[ListenerRule]:
         """

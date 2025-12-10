@@ -34,6 +34,7 @@ The load balancer is configured entirely through environment variables.
   - `STICKY`: Sticky sessions (not implemented)
   - `LRT`: Least Response Time (not implemented)
   Default: `ROUND_ROBIN`
+- `HEADER_CONVENTION_ENABLE` (boolean): When `true`, the load balancer adds common proxy headers (`X-Forwarded-For`, `X-Forwarded-Host`) to upstream requests. Default: `false`
 
 #### Target Groups
 
