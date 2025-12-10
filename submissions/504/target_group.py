@@ -10,16 +10,36 @@ from target import Target
 class TargetGroup:
     """Represents a group of targets for load balancing."""
     
-    def __init__(self, name: str, targets_str: str):
+    def __init__(self, name: str, targets_str: str, 
+                 health_check_enabled: bool = False,
+                 health_check_path: str = '/health',
+                 health_check_interval_ms: int = 30000,
+                 health_check_succeed_threshold: int = 2,
+                 health_check_failure_threshold: int = 2):
         """
         Initialize a target group.
         
         Args:
             name: The name of the target group
             targets_str: Comma-delimited list of <hostname>:<port>/<base-uri> entries
+            health_check_enabled: Whether to enable health checks
+            health_check_path: Path for health check requests
+            health_check_interval_ms: Interval between health checks in milliseconds
+            health_check_succeed_threshold: Consecutive successes to mark healthy
+            health_check_failure_threshold: Consecutive failures to mark unhealthy
         """
         self.name = name
         self.targets = self._parse_targets(targets_str)
+        
+        # Health check configuration
+        self.health_check_enabled = health_check_enabled
+        self.health_check_path = health_check_path
+        self.health_check_interval_ms = health_check_interval_ms
+        self.health_check_succeed_threshold = health_check_succeed_threshold
+        self.health_check_failure_threshold = health_check_failure_threshold
+        
+        # Health check object (initialized lazily)
+        self.health_check = None
     
     def _parse_targets(self, targets_str: str) -> List[Target]:
         """
@@ -113,4 +133,39 @@ class TargetGroup:
     def get_targets(self) -> List[Target]:
         """Get all targets in this group."""
         return self.targets
+    
+    def get_healthy_targets(self) -> List[Target]:
+        """
+        Get only healthy targets from this group.
+        If health checks are disabled, returns all targets.
+        
+        Returns:
+            List of healthy targets
+        """
+        if not self.health_check_enabled or not self.health_check:
+            return self.targets
+        
+        return self.health_check.get_healthy_targets(self.targets)
+    
+    def start_health_checks(self):
+        """Start the health check thread for this target group."""
+        if not self.health_check_enabled or self.health_check:
+            return
+        
+        from health_check import HealthCheck
+        
+        self.health_check = HealthCheck(
+            target_group=self,
+            enabled=self.health_check_enabled,
+            path=self.health_check_path,
+            interval_ms=self.health_check_interval_ms,
+            succeed_threshold=self.health_check_succeed_threshold,
+            failure_threshold=self.health_check_failure_threshold
+        )
+        self.health_check.start()
+    
+    def stop_health_checks(self):
+        """Stop the health check thread for this target group."""
+        if self.health_check:
+            self.health_check.stop()
 

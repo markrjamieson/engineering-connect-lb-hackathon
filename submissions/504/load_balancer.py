@@ -27,6 +27,7 @@ class LoadBalancer:
     def select_target(self, target_group: TargetGroup, request: Request) -> Optional[Target]:
         """
         Select a target from the target group using the configured algorithm.
+        Only selects from healthy targets if health checks are enabled.
         
         Args:
             target_group: The target group to select from
@@ -35,7 +36,8 @@ class LoadBalancer:
         Returns:
             Selected target or None if no targets available
         """
-        targets = target_group.get_targets()
+        # Get healthy targets (or all targets if health checks disabled)
+        targets = target_group.get_healthy_targets()
         
         if not targets:
             return None

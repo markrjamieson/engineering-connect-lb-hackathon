@@ -20,6 +20,8 @@ class Target:
         self.ip = ip
         self.port = port
         self.base_uri = base_uri.rstrip('/') if base_uri != '/' else ''
+        # Unique identifier for health check tracking
+        self._id = id(self)
     
     def get_url(self, path: str) -> str:
         """
