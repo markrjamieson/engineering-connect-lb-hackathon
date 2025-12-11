@@ -4,8 +4,9 @@ Handles request forwarding and load balancing algorithms.
 """
 import requests
 import uuid
+import time
 from flask import Request, Response
-from typing import Optional
+from typing import Optional, Dict
 from config import Config
 from target_group import TargetGroup
 from target import Target
@@ -24,6 +25,7 @@ class LoadBalancer:
         """
         self.config = config
         self.round_robin_counters = {}  # Track round robin state per target group
+        self.sticky_sessions: Dict[str, Dict] = {}  # Track sticky sessions: {client_id: {target: Target, expires_at: float}}
     
     def select_target(self, target_group: TargetGroup, request: Request) -> Optional[Target]:
         """
@@ -49,8 +51,7 @@ class LoadBalancer:
             # Not implemented yet
             return targets[0] if targets else None
         elif algorithm == 'STICKY':
-            # Not implemented yet
-            return targets[0] if targets else None
+            return self._sticky_session(target_group, targets, request)
         elif algorithm == 'LRT':
             # Not implemented yet
             return targets[0] if targets else None
@@ -83,6 +84,69 @@ class LoadBalancer:
         
         # Increment counter for next request
         self.round_robin_counters[group_name] = (index + 1) % len(targets)
+        
+        return target
+    
+    def _get_client_id(self, request: Request) -> str:
+        """
+        Get a unique identifier for the client.
+        Uses IP address from X-Forwarded-For header or remote address.
+        
+        Args:
+            request: The incoming request
+            
+        Returns:
+            Client identifier string
+        """
+        # Try to get client IP from X-Forwarded-For header first
+        x_forwarded_for = request.headers.get('X-Forwarded-For')
+        if x_forwarded_for:
+            # X-Forwarded-For can contain multiple IPs, take the first one
+            client_ip = x_forwarded_for.split(',')[0].strip()
+        else:
+            # Fall back to remote address
+            client_ip = request.access_route[0] if request.access_route else request.remote_addr
+        
+        return client_ip or 'unknown'
+    
+    def _sticky_session(self, target_group: TargetGroup, targets: list, request: Request) -> Target:
+        """
+        Select a target using sticky session algorithm.
+        Clients are assigned to the same target until TTL expires.
+        After expiration, a new session is created using round-robin.
+        
+        Args:
+            target_group: The target group
+            targets: List of available targets
+            request: The incoming request
+            
+        Returns:
+            Selected target
+        """
+        client_id = self._get_client_id(request)
+        session_key = f"{target_group.name}:{client_id}"
+        current_time = time.time()
+        
+        # Check if there's an existing valid session
+        if session_key in self.sticky_sessions:
+            session = self.sticky_sessions[session_key]
+            # Check if session is still valid
+            if current_time < session['expires_at']:
+                # Session is still valid, return the same target
+                return session['target']
+            else:
+                # Session expired, remove it
+                del self.sticky_sessions[session_key]
+        
+        # No valid session exists, create a new one using round-robin
+        target = self._round_robin(target_group, targets)
+        
+        # Create new session with TTL
+        session_ttl = self.config.get_session_ttl()
+        self.sticky_sessions[session_key] = {
+            'target': target,
+            'expires_at': current_time + session_ttl
+        }
         
         return target
     
