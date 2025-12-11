@@ -3,6 +3,7 @@ Load Balancer module.
 Handles request forwarding and load balancing algorithms.
 """
 import requests
+import uuid
 from flask import Request, Response
 from typing import Optional
 from config import Config
@@ -132,35 +133,60 @@ class LoadBalancer:
         Returns:
             Response from the target or error response
         """
-        # Construct full URL
-        url = target.get_url(path)
-
-        # Prepare request headers (exclude hop-by-hop headers)
-        headers = {}
-        for key, value in request.headers:
-            if key.lower() not in ['host', 'connection', 'keep-alive', 'transfer-encoding']:
-                headers[key] = value
-
-        # Prepare request data
-        data = request.get_data()
-
-        # Prepare query string
-        query_string = request.query_string.decode('utf-8')
-        if query_string:
-            url += '?' + query_string
-
-        # Make request with timeout and measure TTFB
-        timeout = self.config.get_connection_timeout()
-
-        # Track active connections and TTFB
         try:
-            target.inc_connections()
-        except Exception:
-            pass
+            # Construct full URL
+            url = target.get_url(path)
+            
+            # Prepare request headers (exclude hop-by-hop headers)
+            headers = {}
+            for key, value in request.headers:
+                if key.lower() not in ['host', 'connection', 'keep-alive', 'transfer-encoding']:
+                    headers[key] = value
 
-        start = time.monotonic()
-        try:
-            # Use stream=True so the call returns after headers (approx TTFB)
+            # Add X-Forwarded-* headers when enabled
+            if self.config.get_header_convention_enable():
+                # Determine client IP (prefer the first element in access_route)
+                client_ip = request.access_route[0] if request.access_route else request.remote_addr
+
+                # X-Forwarded-For: append client IP if already present
+                existing_xff = headers.get('X-Forwarded-For') or headers.get('x-forwarded-for')
+                if existing_xff and client_ip:
+                    headers['X-Forwarded-For'] = f"{existing_xff}, {client_ip}"
+                elif client_ip:
+                    headers['X-Forwarded-For'] = client_ip
+
+                # X-Forwarded-Host: set to requested host
+                if request.host:
+                    headers['X-Forwarded-Host'] = request.host
+
+                # X-Forwarded-Port: set to listener port
+                headers['X-Forwarded-Port'] = str(self.config.get_listener_port())
+
+                # X-Forwarded-Proto: set to request scheme (http/https)
+                headers['X-Forwarded-Proto'] = request.scheme
+
+                # X-Real-IP: set to client IP
+                if client_ip:
+                    headers['X-Real-IP'] = client_ip
+
+                # X-Request-Id: generate unique request ID
+                headers['X-Request-Id'] = str(uuid.uuid4())
+
+                # Host: set to original host header (override the excluded host)
+                if request.host:
+                    headers['Host'] = request.host
+            
+            # Prepare request data
+            data = request.get_data()
+            
+            # Prepare query string
+            query_string = request.query_string.decode('utf-8')
+            if query_string:
+                url += '?' + query_string
+            
+            # Make request with timeout
+            timeout = self.config.get_connection_timeout()
+            
             response = requests.request(
                 method=request.method,
                 url=url,
