@@ -37,11 +37,14 @@ export LOAD_BALANCING_ALGORITHM=ROUND_ROBIN
 # Target Group 1: Backend servers
 export TARGET_GROUP_1_NAME=backend
 export TARGET_GROUP_1_TARGETS=127.0.0.1:8081,127.0.0.1:8082,127.0.0.1:8083
+export TARGET_GROUP_1_HEALTH_CHECK_ENABLED=false
 
 # Listener Rule 1: Root path routing
 export LISTENER_RULE_1_PATH_PREFIX=/
 export LISTENER_RULE_1_PATH_REWRITE=
 export LISTENER_RULE_1_TARGET_GROUP=backend
+
+export HEADER_CONVENTION_ENABLE=false
 
 echo -e "${GREEN}Starting load balancer locally with gunicorn...${NC}"
 echo -e "${YELLOW}Load balancer will run on port 8080${NC}"

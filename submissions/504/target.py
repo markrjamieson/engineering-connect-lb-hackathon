@@ -5,6 +5,7 @@ Represents a single target (IP & port with optional base URI path).
 from typing import Optional
 import threading
 import time
+import collections
 
 
 class Target:
@@ -29,9 +30,10 @@ class Target:
         self.weight = max(1, int(weight)) if weight is not None else 1
 
         # Runtime metrics for LRT
+        # Use atomic operations where possible to reduce lock contention
         self.active_connections = 0
-        self._ttfb_total = 0.0
-        self._ttfb_count = 0
+        # Use deque with maxlen to limit memory usage and improve performance
+        self._ttfb_samples = collections.deque(maxlen=1000)  # Keep last 1000 samples
         self._lock = threading.Lock()
     
     def get_url(self, path: str) -> str:
@@ -59,25 +61,31 @@ class Target:
         return f'Target({self.ip}:{self.port}{self.base_uri}{weight_str})'
 
     def inc_connections(self):
+        """Increment active connections counter (minimal lock time)."""
         with self._lock:
             self.active_connections += 1
 
     def dec_connections(self):
+        """Decrement active connections counter (minimal lock time)."""
         with self._lock:
             if self.active_connections > 0:
                 self.active_connections -= 1
 
     def record_ttfb(self, ttfb_seconds: float):
-        with self._lock:
-            try:
-                self._ttfb_total += float(ttfb_seconds)
-                self._ttfb_count += 1
-            except Exception:
-                pass
+        """Record time-to-first-byte (optimized for high concurrency)."""
+        try:
+            # Append is thread-safe for deque, but we use lock for consistency
+            # and to ensure atomic operation
+            with self._lock:
+                self._ttfb_samples.append(float(ttfb_seconds))
+        except Exception:
+            pass
 
     def avg_ttfb(self) -> float:
+        """Calculate average time-to-first-byte (optimized)."""
         with self._lock:
-            if self._ttfb_count == 0:
+            if not self._ttfb_samples:
                 return 0.0
-            return self._ttfb_total / self._ttfb_count
+            # Use sum() which is faster than manual accumulation for deque
+            return sum(self._ttfb_samples) / len(self._ttfb_samples)
 

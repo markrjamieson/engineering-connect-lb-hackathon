@@ -4,6 +4,9 @@ Soak test runner for the load balancer.
 
 Sends sustained traffic to a target URL for a configurable duration and/or
 request count, then writes a summary log file for comparison across runs.
+
+
+python tests/soak_test.py --url http://localhost:8080/test --duration-seconds 60 --requests 10000 --concurrency 20 --log-file soak_results_round2.log
 """
 
 import argparse

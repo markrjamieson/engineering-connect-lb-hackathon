@@ -21,7 +21,9 @@ load_balancer = LoadBalancer(config)
 def start_health_checks():
     """Start health checks for all target groups."""
     for target_group in config.target_groups.values():
-        target_group.start_health_checks()
+        # Only start if explicitly enabled
+        if target_group.health_check_enabled:
+            target_group.start_health_checks()
 
 # Stop health checks on shutdown
 def stop_health_checks():

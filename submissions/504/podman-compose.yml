@@ -25,6 +25,8 @@ services:
       LISTENER_RULE_1_PATH_PREFIX: "/"
       LISTENER_RULE_1_PATH_REWRITE: ""
       LISTENER_RULE_1_TARGET_GROUP: "backend"
+
+      HEADER_CONVENTION_ENABLE: "true"
       
       # Example: Additional target groups and listener rules can be added like this:
       # TARGET_GROUP_2_NAME: "api_backend"

@@ -13,7 +13,7 @@ class TargetGroup:
     def __init__(self, name: str, targets_str: str, weights: Optional[Dict[str, int]] = None,
                  health_check_enabled: bool = False,
                  health_check_path: str = '/health',
-                 health_check_interval_ms: int = 30000,
+                 health_check_interval_ms: int = 60000,
                  health_check_succeed_threshold: int = 2,
                  health_check_failure_threshold: int = 2):
         """
@@ -190,7 +190,11 @@ class TargetGroup:
     
     def start_health_checks(self):
         """Start the health check thread for this target group."""
-        if not self.health_check_enabled or self.health_check:
+        # Early return if health checks are disabled or already running
+        if not self.health_check_enabled:
+            return
+        
+        if self.health_check:
             return
         
         from health_check import HealthCheck
