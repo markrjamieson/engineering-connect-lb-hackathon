@@ -43,6 +43,13 @@ export LISTENER_RULE_1_PATH_PREFIX=/
 export LISTENER_RULE_1_PATH_REWRITE=
 export LISTENER_RULE_1_TARGET_GROUP=backend
 
+# Health Checks
+export TARGET_GROUP_1_HEALTH_CHECK_ENABLED=true
+export TARGET_GROUP_1_HEALTH_CHECK_PATH=/health
+export TARGET_GROUP_1_HEALTH_CHECK_INTERVAL=60000
+export TARGET_GROUP_1_HEALTH_CHECK_SUCCEED_THRESHOLD=2
+export TARGET_GROUP_1_HEALTH_CHECK_FAILURE_THRESHOLD=3
+
 echo -e "${GREEN}Starting load balancer locally with gunicorn...${NC}"
 echo -e "${YELLOW}Load balancer will run on port 8080${NC}"
 echo -e "${YELLOW}Press Ctrl+C to stop all servers${NC}"
