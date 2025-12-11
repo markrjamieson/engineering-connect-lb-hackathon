@@ -5,12 +5,13 @@ Handles request forwarding and load balancing algorithms.
 import requests
 import uuid
 from flask import Request, Response
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 from config import Config
 from target_group import TargetGroup
 from target import Target
 from error_handler import handle_error
 import time
+import threading
 
 
 # Hop-by-hop headers that should not be forwarded
@@ -33,6 +34,9 @@ class LoadBalancer:
         self.weighted_counters = {}  # Track round robin state per target group
         # Session pool per target host for connection reuse
         self._sessions: Dict[str, requests.Session] = {}
+        # Sticky session storage: {target_group_name: {client_ip: (target, expiration_time_ms)}}
+        self.sticky_sessions: Dict[str, Dict[str, Tuple[Target, int]]] = {}
+        self.sticky_lock = threading.Lock()  # Lock for sticky session access
     
     def select_target(self, target_group: TargetGroup, request: Request) -> Optional[Target]:
         """
@@ -61,8 +65,7 @@ class LoadBalancer:
         elif algorithm == 'WEIGHTED':
             return self._weighted(target_group, targets)
         elif algorithm == 'STICKY':
-            # Not implemented yet
-            return targets[0] if targets else None
+            return self._sticky(target_group, targets, request)
         else:
             # Default to round robin
             return self._round_robin(target_group, targets)
@@ -165,6 +168,88 @@ class LoadBalancer:
                 best_metric = metric
 
         return best
+    
+    def _get_client_ip(self, request: Request) -> str:
+        """
+        Get the client IP address from the request.
+        Checks X-Forwarded-For header first, then access_route, then remote_addr.
+        
+        Args:
+            request: The incoming Flask request
+            
+        Returns:
+            Client IP address as string
+        """
+        # Check X-Forwarded-For header first
+        x_forwarded_for = request.headers.get('X-Forwarded-For') or request.headers.get('x-forwarded-for')
+        if x_forwarded_for:
+            # Take the first IP (original client)
+            client_ip = x_forwarded_for.split(',')[0].strip()
+            if client_ip:
+                return client_ip
+        
+        # Fall back to access_route or remote_addr
+        if request.access_route:
+            return request.access_route[0]
+        return request.remote_addr or 'unknown'
+    
+    def _sticky(self, target_group: TargetGroup, targets: list, request: Request) -> Target:
+        """
+        Select a target using sticky session algorithm.
+        Clients are assigned to the same target until the session TTL expires.
+        After expiration, a new session is created using round-robin.
+        
+        Args:
+            target_group: The target group
+            targets: List of available targets
+            request: The incoming request (for client identification)
+            
+        Returns:
+            Selected target
+        """
+        group_name = target_group.name
+        client_ip = self._get_client_ip(request)
+        current_time_ms = int(time.time() * 1000)
+        session_ttl_ms = self.config.get_session_ttl()
+        
+        with self.sticky_lock:
+            # Initialize target group session storage if needed
+            if group_name not in self.sticky_sessions:
+                self.sticky_sessions[group_name] = {}
+            
+            group_sessions = self.sticky_sessions[group_name]
+            
+            # Check if client has an active session
+            if client_ip in group_sessions:
+                target, expiration_time = group_sessions[client_ip]
+                
+                # Check if session is still valid and target is still in healthy targets
+                # Compare by IP and port since target objects might be different instances
+                target_still_available = any(
+                    t.ip == target.ip and t.port == target.port for t in targets
+                )
+                
+                if current_time_ms < expiration_time and target_still_available:
+                    # Find the actual target object from the current targets list
+                    # to ensure we're using the latest target instance
+                    for t in targets:
+                        if t.ip == target.ip and t.port == target.port:
+                            # Update stored target to current instance
+                            group_sessions[client_ip] = (t, expiration_time)
+                            return t
+                else:
+                    # Session expired or target no longer available, remove it
+                    del group_sessions[client_ip]
+            
+            # No valid session exists, create new one using round-robin
+            # Use round-robin to select next target
+            selected_target = self._round_robin(target_group, targets)
+            
+            # Store new session with expiration time
+            expiration_time = current_time_ms + session_ttl_ms
+            group_sessions[client_ip] = (selected_target, expiration_time)
+            
+            return selected_target
     
     def _get_session(self, target: Target) -> requests.Session:
         """

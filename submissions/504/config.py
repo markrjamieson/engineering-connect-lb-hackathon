@@ -18,6 +18,8 @@ class Config:
         # Allowed values: ROUND_ROBIN, WEIGHTED, STICKY, LRT
         self.load_balancing_algorithm = os.getenv('LOAD_BALANCING_ALGORITHM', 'ROUND_ROBIN')
         self.header_convention_enable = os.getenv('HEADER_CONVENTION_ENABLE', 'false').lower() == 'true'
+        # Session TTL in milliseconds for sticky sessions
+        self.session_ttl = int(os.getenv('SESSION_TTL', '300000'))  # Default 5 minutes
         
         # Parse listener rules
         self.listener_rules = self._parse_listener_rules()
@@ -44,6 +46,10 @@ class Config:
     def get_header_convention_enable(self) -> bool:
         """Return whether to add convention headers (e.g., X-Forwarded-*)."""
         return self.header_convention_enable
+    
+    def get_session_ttl(self) -> int:
+        """Get the session TTL in milliseconds for sticky sessions."""
+        return self.session_ttl
     
     def _parse_listener_rules(self) -> List[ListenerRule]:
         """
