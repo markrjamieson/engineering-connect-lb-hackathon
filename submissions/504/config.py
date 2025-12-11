@@ -15,6 +15,7 @@ class Config:
     def __init__(self):
         self.listener_port = int(os.getenv('LISTENER_PORT', '8080'))
         self.connection_timeout = int(os.getenv('CONNECTION_TIMEOUT', '5000')) / 1000.0  # Convert ms to seconds
+        # Allowed values: ROUND_ROBIN, WEIGHTED, STICKY, LRT
         self.load_balancing_algorithm = os.getenv('LOAD_BALANCING_ALGORITHM', 'ROUND_ROBIN')
         self.header_convention_enable = os.getenv('HEADER_CONVENTION_ENABLE', 'false').lower() == 'true'
         self.session_ttl = int(os.getenv('SESSION_TTL', '300000')) / 1000.0  # Convert ms to seconds
@@ -79,7 +80,8 @@ class Config:
     def _parse_target_groups(self) -> Dict[str, TargetGroup]:
         """
         Parse target groups from environment variables.
-        Expected format: TARGET_GROUP_<N>_NAME, TARGET_GROUP_<N>_TARGETS
+        Expected format: TARGET_GROUP_<N>_NAME, TARGET_GROUP_<N>_TARGETS,
+                       TARGET_GROUP_<N>_HEALTH_CHECK_ENABLED, etc.
         """
         target_groups = {}
         group_index = 1
@@ -93,8 +95,31 @@ class Config:
                 break
             
             targets_str = os.getenv(targets_key, '')
+            
+            # Parse health check configuration
+            health_check_enabled_key = f'TARGET_GROUP_{group_index}_HEALTH_CHECK_ENABLED'
+            health_check_path_key = f'TARGET_GROUP_{group_index}_HEALTH_CHECK_PATH'
+            health_check_interval_key = f'TARGET_GROUP_{group_index}_HEALTH_CHECK_INTERVAL'
+            health_check_succeed_threshold_key = f'TARGET_GROUP_{group_index}_HEALTH_CHECK_SUCCEED_THRESHOLD'
+            health_check_failure_threshold_key = f'TARGET_GROUP_{group_index}_HEALTH_CHECK_FAILURE_THRESHOLD'
+            
+            # Parse with defaults
+            health_check_enabled = os.getenv(health_check_enabled_key, 'false').lower() == 'true'
+            health_check_path = os.getenv(health_check_path_key, '/health')
+            health_check_interval = int(os.getenv(health_check_interval_key, '60000'))
+            health_check_succeed_threshold = int(os.getenv(health_check_succeed_threshold_key, '2'))
+            health_check_failure_threshold = int(os.getenv(health_check_failure_threshold_key, '2'))
+            
             if targets_str:
-                target_group = TargetGroup(name, targets_str)
+                target_group = TargetGroup(
+                    name, 
+                    targets_str,
+                    health_check_enabled=health_check_enabled,
+                    health_check_path=health_check_path,
+                    health_check_interval_ms=health_check_interval,
+                    health_check_succeed_threshold=health_check_succeed_threshold,
+                    health_check_failure_threshold=health_check_failure_threshold
+                )
                 target_groups[name] = target_group
             
             group_index += 1

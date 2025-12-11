@@ -11,6 +11,7 @@ from config import Config
 from target_group import TargetGroup
 from target import Target
 from error_handler import handle_error
+import time
 
 
 class LoadBalancer:
@@ -30,6 +31,7 @@ class LoadBalancer:
     def select_target(self, target_group: TargetGroup, request: Request) -> Optional[Target]:
         """
         Select a target from the target group using the configured algorithm.
+        Only selects from healthy targets if health checks are enabled.
         
         Args:
             target_group: The target group to select from
@@ -38,7 +40,8 @@ class LoadBalancer:
         Returns:
             Selected target or None if no targets available
         """
-        targets = target_group.get_targets()
+        # Get healthy targets (or all targets if health checks disabled)
+        targets = target_group.get_healthy_targets()
         
         if not targets:
             return None
@@ -47,6 +50,8 @@ class LoadBalancer:
         
         if algorithm == 'ROUND_ROBIN':
             return self._round_robin(target_group, targets)
+        elif algorithm == 'LRT':
+            return self._least_response_time(target_group, targets)
         elif algorithm == 'WEIGHTED':
             # Not implemented yet
             return targets[0] if targets else None
@@ -86,6 +91,36 @@ class LoadBalancer:
         self.round_robin_counters[group_name] = (index + 1) % len(targets)
         
         return target
+
+    def _least_response_time(self, target_group: TargetGroup, targets: list) -> Target:
+        """
+        Select the target with the lowest (active_connections * avg_ttfb / weight).
+        If avg_ttfb is unknown (0), it's treated as a small value to prefer idle targets.
+        """
+        best = None
+        best_metric = None
+        for target in targets:
+            # get metrics
+            active = getattr(target, 'active_connections', 0)
+            avg_ttfb = getattr(target, 'avg_ttfb', None)
+            try:
+                avg = target.avg_ttfb() if callable(target.avg_ttfb) else 0.0
+            except Exception:
+                avg = 0.0
+
+            if avg <= 0.0:
+                # treat unknown avg as very small to favor cold targets
+                avg = 0.001
+
+            weight = getattr(target, 'weight', 1) or 1
+
+            metric = (active * avg) / float(weight)
+
+            if best is None or metric < best_metric:
+                best = target
+                best_metric = metric
+
+        return best
     
     def _get_client_id(self, request: Request) -> str:
         """
@@ -222,22 +257,36 @@ class LoadBalancer:
                 headers=headers,
                 data=data,
                 timeout=timeout,
-                allow_redirects=False
+                allow_redirects=False,
+                stream=True
             )
-            
-            # Create Flask response
+
+            ttfb = time.monotonic() - start
+            try:
+                target.record_ttfb(ttfb)
+            except Exception:
+                pass
+
+            # Read body to completion
+            content = response.content
+
             flask_response = Response(
-                response.content,
+                content,
                 status=response.status_code,
                 headers=dict(response.headers)
             )
-            
+
             return flask_response
-            
+
         except requests.exceptions.Timeout:
             return handle_error(504, "Request timeout")
         except requests.exceptions.ConnectionError:
             return handle_error(502, "Connection error")
         except Exception as e:
             return handle_error(502, f"Error forwarding request: {str(e)}")
+        finally:
+            try:
+                target.dec_connections()
+            except Exception:
+                pass
 

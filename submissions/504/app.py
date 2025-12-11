@@ -4,6 +4,7 @@ Main entry point for the load balancer service.
 """
 from flask import Flask, request, Response
 import os
+import atexit
 from config import Config
 from load_balancer import LoadBalancer
 from error_handler import handle_error
@@ -13,6 +14,24 @@ app = Flask(__name__)
 # Initialize configuration
 config = Config()
 load_balancer = LoadBalancer(config)
+
+# Start health checks for all target groups
+def start_health_checks():
+    """Start health checks for all target groups."""
+    for target_group in config.target_groups.values():
+        target_group.start_health_checks()
+
+# Stop health checks on shutdown
+def stop_health_checks():
+    """Stop health checks for all target groups."""
+    for target_group in config.target_groups.values():
+        target_group.stop_health_checks()
+
+# Start health checks when app starts
+start_health_checks()
+
+# Register shutdown handler
+atexit.register(stop_health_checks)
 
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
