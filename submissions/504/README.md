@@ -32,7 +32,7 @@ The load balancer is configured entirely through environment variables.
   - `ROUND_ROBIN`: Evenly distributes requests in a circular pattern (implemented)
   - `WEIGHTED`: Weighted distribution (not implemented)
   - `STICKY`: Sticky sessions (not implemented)
-  - `LRT`: Least Response Time (not implemented)
+  - `LRT`: Least Response Time (implemented)
   Default: `ROUND_ROBIN`
 - `HEADER_CONVENTION_ENABLE` (boolean): When `true`, the load balancer adds common proxy headers (`X-Forwarded-For`, `X-Forwarded-Host`) to upstream requests. Default: `false`
 
@@ -55,6 +55,54 @@ Target groups define sets of backend servers. Each target group is configured us
 - `backend.example.com:8080/v1,backend2.example.com:8080/v1` - Multiple targets
 
 **Note:** If a hostname resolves to multiple IP addresses, each IP address becomes a separate target.
+
+#### Health Checks
+
+Target groups can be configured with periodic health checks to monitor the availability of targets. Unhealthy targets are temporarily removed from load balancing until they become healthy again.
+
+**Health Check Configuration Parameters:**
+
+- `TARGET_GROUP_<N>_HEALTH_CHECK_ENABLED` (boolean): Enables health checks for this target group. Options: `true` or `false`. Default: `false`
+- `TARGET_GROUP_<N>_HEALTH_CHECK_PATH` (string): The HTTP path to request for health checks. Default: `/health`
+- `TARGET_GROUP_<N>_HEALTH_CHECK_INTERVAL` (integer): Interval between health checks in milliseconds. Default: `30000` (30 seconds)
+- `TARGET_GROUP_<N>_HEALTH_CHECK_SUCCEED_THRESHOLD` (integer): Number of consecutive successful health checks (HTTP 200) required to mark a target as healthy. Default: `2`
+- `TARGET_GROUP_<N>_HEALTH_CHECK_FAILURE_THRESHOLD` (integer): Number of consecutive failed health checks required to mark a target as unhealthy. Default: `2`
+
+**Health Check Behavior:**
+
+- Health checks are performed in a background thread for each target group
+- A health check request is performed by sending an HTTP GET request to `http://<target_ip>:<target_port><health_check_path>`
+- Only HTTP 200 responses are considered successful; any other status code or connection error is considered a failure
+- Targets transition between healthy and unhealthy states only after reaching the configured thresholds
+- When health checks are enabled, only healthy targets are used for load balancing
+- If all targets become unhealthy, a 503 error is returned
+
+**Example: Health Check Configuration**
+
+```bash
+export LISTENER_PORT=8080
+export CONNECTION_TIMEOUT=5000
+export LOAD_BALANCING_ALGORITHM=ROUND_ROBIN
+
+# Target Group with Health Checks
+export TARGET_GROUP_1_NAME=backend
+export TARGET_GROUP_1_TARGETS=backend1.example.com:8080,backend2.example.com:8080
+export TARGET_GROUP_1_HEALTH_CHECK_ENABLED=true
+export TARGET_GROUP_1_HEALTH_CHECK_PATH=/health
+export TARGET_GROUP_1_HEALTH_CHECK_INTERVAL=10000
+export TARGET_GROUP_1_HEALTH_CHECK_SUCCEED_THRESHOLD=2
+export TARGET_GROUP_1_HEALTH_CHECK_FAILURE_THRESHOLD=3
+
+# Listener Rule
+export LISTENER_RULE_1_PATH_PREFIX=/
+export LISTENER_RULE_1_PATH_REWRITE=
+export LISTENER_RULE_1_TARGET_GROUP=backend
+```
+
+In this example:
+- Health checks are enabled and run every 10 seconds
+- Targets must return HTTP 200 twice in a row to be marked healthy
+- Targets must fail 3 times in a row to be marked unhealthy
 
 #### Listener Rules
 
@@ -200,6 +248,110 @@ MOCK_DELAY_MS=100 python mock_target.py 8081
 
 # Return error code
 MOCK_ERROR_CODE=500 python mock_target.py 8081
+```
+
+#### Testing Health Checks
+
+To verify that the health check feature is working correctly, run the verification script:
+
+```bash
+chmod +x verify_health_checks.py
+python verify_health_checks.py
+```
+
+This script tests:
+- Health check configuration parsing
+- Starting and stopping health checks
+- Filtering targets by health status
+- Environment variable parsing
+
+#### Health Check Demo
+
+To see health checks in action with real HTTP requests:
+
+```bash
+chmod +x test_health_checks.sh
+./test_health_checks.sh
+```
+
+This script:
+- Starts 3 mock target servers
+- Configures a load balancer with health checks enabled
+- Makes test requests to show healthy targets being used
+- Automatically cleans up when complete
+
+**Example Output:**
+```
+Health Check Test Demo
+Starting mock target servers...
+✓ Mock target 1 started on port 8081 (PID: 12345)
+✓ Mock target 2 started on port 8082 (PID: 12346)
+✓ Mock target 3 started on port 8083 (PID: 12347)
+
+Configuring load balancer with health checks...
+✓ Load balancer configured
+
+Starting load balancer on port 8080...
+✓ Load balancer started (PID: 12348)
+
+Making test requests to load balancer...
+Request 1:
+{
+  "server_port": 8081,
+  "method": "GET",
+  "path": "/test",
+  ...
+}
+```
+
+#### Manual Health Check Testing
+
+1. **Start mock targets that respond to health checks:**
+```bash
+# Terminal 1
+python mock_target.py 8081
+
+# Terminal 2  
+python mock_target.py 8082
+
+# Terminal 3
+python mock_target.py 8083
+```
+
+2. **Configure environment variables with health checks enabled:**
+```bash
+export LISTENER_PORT=8080
+export CONNECTION_TIMEOUT=5000
+export LOAD_BALANCING_ALGORITHM=ROUND_ROBIN
+
+export TARGET_GROUP_1_NAME=backends
+export TARGET_GROUP_1_TARGETS=127.0.0.1:8081,127.0.0.1:8082,127.0.0.1:8083
+export TARGET_GROUP_1_HEALTH_CHECK_ENABLED=true
+export TARGET_GROUP_1_HEALTH_CHECK_PATH=/health
+export TARGET_GROUP_1_HEALTH_CHECK_INTERVAL=5000
+export TARGET_GROUP_1_HEALTH_CHECK_SUCCEED_THRESHOLD=1
+export TARGET_GROUP_1_HEALTH_CHECK_FAILURE_THRESHOLD=1
+
+export LISTENER_RULE_1_PATH_PREFIX=/
+export LISTENER_RULE_1_PATH_REWRITE=
+export LISTENER_RULE_1_TARGET_GROUP=backends
+```
+
+3. **Start the load balancer:**
+```bash
+# Terminal 4
+python app.py
+```
+
+4. **Make requests to test:**
+```bash
+# Make multiple requests
+for i in {1..10}; do
+    echo "Request $i:"
+    curl -s http://localhost:8080/api/test | python -m json.tool | head -5
+    echo ""
+    sleep 1
+done
 ```
 
 #### Quick Test Setup
