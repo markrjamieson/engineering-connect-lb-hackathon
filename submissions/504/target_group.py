@@ -3,17 +3,17 @@ Target Group module.
 Represents a set of targets that can be load balanced.
 """
 import socket
-from typing import List, Optional
+from typing import List, Optional, Dict
 from target import Target
 
 
 class TargetGroup:
     """Represents a group of targets for load balancing."""
     
-    def __init__(self, name: str, targets_str: str, 
+    def __init__(self, name: str, targets_str: str, weights: Optional[Dict[str, int]] = None,
                  health_check_enabled: bool = False,
                  health_check_path: str = '/health',
-                 health_check_interval_ms: int = 30000,
+                 health_check_interval_ms: int = 60000,
                  health_check_succeed_threshold: int = 2,
                  health_check_failure_threshold: int = 2):
         """
@@ -22,6 +22,7 @@ class TargetGroup:
         Args:
             name: The name of the target group
             targets_str: Comma-delimited list of <hostname>:<port>/<base-uri> entries
+            weights: Dictionary mapping hostname to weight (optional)
             health_check_enabled: Whether to enable health checks
             health_check_path: Path for health check requests
             health_check_interval_ms: Interval between health checks in milliseconds
@@ -29,6 +30,9 @@ class TargetGroup:
             health_check_failure_threshold: Consecutive failures to mark unhealthy
         """
         self.name = name
+        # Store None explicitly to distinguish between "not provided" and "empty dict"
+        self.weights = weights if weights is not None else {}
+        self._weights_provided = weights is not None
         self.targets = self._parse_targets(targets_str)
         
         # Health check configuration
@@ -63,14 +67,6 @@ class TargetGroup:
         for spec in target_specs:
             if not spec:
                 continue
-            # Allow optional weight suffix using '@', e.g. host:port/path@2
-            weight = 1
-            if '@' in spec:
-                try:
-                    spec, weight_str = spec.rsplit('@', 1)
-                    weight = int(weight_str)
-                except Exception:
-                    weight = 1
             
             # Parse hostname:port/base-uri
             # First, check if there's a base URI
@@ -97,9 +93,12 @@ class TargetGroup:
             # Resolve DNS to get all IP addresses
             ip_addresses = self._resolve_dns(hostname)
             
-            # Create a target for each IP address
+            # Get weight from weights dict if available, otherwise default to 1
+            weight = self.weights.get(hostname, 1) if self.weights else 1
+            
+            # Create a target for each IP address, preserving hostname for weight lookup
             for ip in ip_addresses:
-                target = Target(ip, port, base_uri, weight=weight)
+                target = Target(ip, port, base_uri, hostname=hostname, weight=weight)
                 targets.append(target)
         
         return targets
@@ -142,6 +141,40 @@ class TargetGroup:
         """Get all targets in this group."""
         return self.targets
     
+    def get_weight(self, hostname: str) -> int:
+        """
+        Get the weight for a hostname.
+        
+        Args:
+            hostname: The hostname to get weight for
+            
+        Returns:
+            The weight for the hostname, or 1 if not specified
+        """
+        return self.weights.get(hostname, 1) if self.weights else 1
+    
+    def get_weighted_target_list(self) -> List[Target]:
+        """
+        Get a list of targets expanded by their weights for weighted round-robin.
+        Each target appears in the list a number of times equal to its weight.
+        Weights are configured via TARGET_GROUP_<N>_WEIGHTS environment variable.
+        
+        Returns:
+            List of targets expanded by weight, or empty list if no weights configured
+        """
+        # If weights were not provided via env var, return empty list
+        if not self._weights_provided:
+            return []
+        
+        weighted_list = []
+        # Use target.weight directly - it's already set from weights dict during target creation
+        for target in self.targets:
+            # Add this target weight times
+            for _ in range(target.weight):
+                weighted_list.append(target)
+        
+        return weighted_list
+    
     def get_healthy_targets(self) -> List[Target]:
         """
         Get only healthy targets from this group.
@@ -157,7 +190,11 @@ class TargetGroup:
     
     def start_health_checks(self):
         """Start the health check thread for this target group."""
-        if not self.health_check_enabled or self.health_check:
+        # Early return if health checks are disabled or already running
+        if not self.health_check_enabled:
+            return
+        
+        if self.health_check:
             return
         
         from health_check import HealthCheck

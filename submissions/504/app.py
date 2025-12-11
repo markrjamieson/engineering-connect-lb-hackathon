@@ -15,11 +15,15 @@ app = Flask(__name__)
 config = Config()
 load_balancer = LoadBalancer(config)
 
+# REVIEW: Unsure if we need to be able to handle anymore methods than GET. If we remove the methods, then default is GET.
+
 # Start health checks for all target groups
 def start_health_checks():
     """Start health checks for all target groups."""
     for target_group in config.target_groups.values():
-        target_group.start_health_checks()
+        # Only start if explicitly enabled
+        if target_group.health_check_enabled:
+            target_group.start_health_checks()
 
 # Stop health checks on shutdown
 def stop_health_checks():
@@ -32,7 +36,6 @@ start_health_checks()
 
 # Register shutdown handler
 atexit.register(stop_health_checks)
-
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])

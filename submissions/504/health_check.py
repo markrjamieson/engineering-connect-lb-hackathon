@@ -43,6 +43,10 @@ class HealthCheck:
         # Target health tracking
         self.target_health = {}  # {target: {'consecutive_failures': int, 'consecutive_successes': int, 'healthy': bool}}
         
+        # Cached healthy targets list (performance optimization)
+        self._healthy_targets_cache = None
+        self._cache_lock = threading.Lock()
+        
         # Thread control
         self.thread = None
         self.running = False
@@ -56,6 +60,11 @@ class HealthCheck:
             return
         
         self.running = True
+        # Initialize cache with all targets (assume healthy initially)
+        with self._cache_lock:
+            if self._healthy_targets_cache is None:
+                self._healthy_targets_cache = list(self.target_group.targets)
+        
         self.thread = threading.Thread(target=self._health_check_loop, daemon=True)
         self.thread.start()
     
@@ -103,6 +112,9 @@ class HealthCheck:
         
         health_info = self.target_health[target]
         
+        # Store old health status to detect changes
+        old_healthy = health_info['healthy']
+        
         # Perform health check
         is_healthy = self._perform_health_check(target)
         
@@ -122,6 +134,10 @@ class HealthCheck:
             # Mark as unhealthy if we've reached the threshold
             if health_info['consecutive_failures'] >= self.failure_threshold:
                 health_info['healthy'] = False
+        
+        # Invalidate cache if health status changed
+        if old_healthy != health_info['healthy']:
+            self._invalidate_cache()
     
     def _perform_health_check(self, target: Target) -> bool:
         """
@@ -167,9 +183,16 @@ class HealthCheck:
         
         return self.target_health[target]['healthy']
     
+    def _invalidate_cache(self):
+        """Invalidate the healthy targets cache."""
+        with self._cache_lock:
+            self._healthy_targets_cache = None
+    
     def get_healthy_targets(self, targets: list) -> list:
         """
         Filter targets to only include healthy ones.
+        Uses caching to avoid rebuilding the list on every request.
+        Cache is invalidated automatically when health status changes.
         
         Args:
             targets: List of targets to filter
@@ -180,4 +203,18 @@ class HealthCheck:
         if not self.enabled:
             return targets
         
-        return [target for target in targets if self.is_target_healthy(target)]
+        # Fast path: check cache without lock first (double-checked locking pattern)
+        cached = self._healthy_targets_cache
+        if cached is not None:
+            return cached
+        
+        # Cache miss - rebuild cache with proper synchronization
+        with self._cache_lock:
+            # Double-check after acquiring lock (another thread might have rebuilt it)
+            if self._healthy_targets_cache is not None:
+                return self._healthy_targets_cache
+            
+            # Rebuild cache
+            healthy = [target for target in targets if self.is_target_healthy(target)]
+            self._healthy_targets_cache = healthy
+            return healthy

@@ -24,6 +24,10 @@ class Config:
         
         # Parse target groups
         self.target_groups = self._parse_target_groups()
+        
+        # Validate that weights are provided if WEIGHTED algorithm is used
+        if self.load_balancing_algorithm == 'WEIGHTED':
+            self._validate_weighted_algorithm_has_weights()
     
     def get_listener_port(self) -> int:
         """Get the listener port."""
@@ -75,7 +79,7 @@ class Config:
     def _parse_target_groups(self) -> Dict[str, TargetGroup]:
         """
         Parse target groups from environment variables.
-        Expected format: TARGET_GROUP_<N>_NAME, TARGET_GROUP_<N>_TARGETS,
+        Expected format: TARGET_GROUP_<N>_NAME, TARGET_GROUP_<N>_TARGETS, TARGET_GROUP_<N>_WEIGHTS,
                        TARGET_GROUP_<N>_HEALTH_CHECK_ENABLED, etc.
         """
         target_groups = {}
@@ -84,6 +88,7 @@ class Config:
         while True:
             name_key = f'TARGET_GROUP_{group_index}_NAME'
             targets_key = f'TARGET_GROUP_{group_index}_TARGETS'
+            weights_key = f'TARGET_GROUP_{group_index}_WEIGHTS'
             
             name = os.getenv(name_key)
             if not name:
@@ -106,9 +111,19 @@ class Config:
             health_check_failure_threshold = int(os.getenv(health_check_failure_threshold_key, '2'))
             
             if targets_str:
+                # Parse weights if provided
+                weights_str = os.getenv(weights_key)
+                weights = self._parse_weights(weights_str)
+                
+                # Validate weights if provided and algorithm is WEIGHTED
+                # This validates that all targets in the string have weights
+                if weights and self.load_balancing_algorithm == 'WEIGHTED':
+                    self._validate_weights(name, targets_str, weights)
+                
                 target_group = TargetGroup(
                     name, 
                     targets_str,
+                    weights=weights,
                     health_check_enabled=health_check_enabled,
                     health_check_path=health_check_path,
                     health_check_interval_ms=health_check_interval,
@@ -120,6 +135,105 @@ class Config:
             group_index += 1
         
         return target_groups
+    
+    def _parse_weights(self, weights_str: Optional[str]) -> Optional[Dict[str, int]]:
+        """
+        Parse target weights from environment variable.
+        Format: <hostname>:<weight>,<hostname>:<weight>,...
+        
+        Args:
+            weights_str: Comma-delimited list of <hostname>:<weight> entries
+            
+        Returns:
+            Dictionary mapping hostname to weight, or None if not provided
+        """
+        if not weights_str:
+            return None
+        
+        weights = {}
+        weight_specs = [spec.strip() for spec in weights_str.split(',')]
+        
+        for spec in weight_specs:
+            if not spec:
+                continue
+            
+            if ':' not in spec:
+                raise ValueError(f"Invalid weight format in '{spec}': expected format is 'hostname:weight'")
+            
+            hostname, weight_str = spec.rsplit(':', 1)
+            hostname = hostname.strip()
+            
+            try:
+                weight = int(weight_str.strip())
+                if weight < 1:
+                    raise ValueError(f"Weight must be >= 1, got {weight}")
+                weights[hostname] = weight
+            except ValueError as e:
+                if "Weight must be >= 1" in str(e):
+                    raise
+                raise ValueError(f"Invalid weight format in '{spec}': {e}")
+        
+        return weights if weights else None
+    
+    def _validate_weights(self, group_name: str, targets_str: str, weights: Dict[str, int]) -> None:
+        """
+        Validate that all hostnames in targets_str have corresponding weights.
+        
+        Args:
+            group_name: Name of the target group (for error messages)
+            targets_str: Comma-delimited list of target specifications
+            weights: Dictionary of hostname -> weight mappings
+            
+        Raises:
+            ValueError: If any hostname in targets_str is missing from weights
+        """
+        if not targets_str:
+            return
+        
+        # Extract hostnames from targets_str
+        target_specs = [spec.strip() for spec in targets_str.split(',')]
+        hostnames_in_targets = set()
+        
+        for spec in target_specs:
+            if not spec:
+                continue
+            
+            # Parse hostname:port/base-uri
+            if '/' in spec:
+                address_part = spec.split('/', 1)[0]
+            else:
+                address_part = spec
+            
+            if ':' in address_part:
+                hostname = address_part.rsplit(':', 1)[0]
+            else:
+                hostname = address_part
+            
+            hostnames_in_targets.add(hostname)
+        
+        # Check that all hostnames have weights
+        missing_hostnames = hostnames_in_targets - set(weights.keys())
+        if missing_hostnames:
+            raise ValueError(
+                f"Target group '{group_name}': All targets must have weights specified. "
+                f"Missing weights for: {', '.join(sorted(missing_hostnames))}"
+            )
+    
+    def _validate_weighted_algorithm_has_weights(self) -> None:
+        """
+        Validate that all target groups have weights configured when WEIGHTED algorithm is used.
+        Weights must be provided via TARGET_GROUP_<N>_WEIGHTS environment variable.
+        
+        Raises:
+            ValueError: If any target group is missing weights
+        """
+        for group_name, target_group in self.target_groups.items():
+            # Check if weights dict is empty (means weights were not provided)
+            if not target_group.weights:
+                raise ValueError(
+                    f"LOAD_BALANCING_ALGORITHM is set to WEIGHTED, but target group "
+                    f"'{group_name}' does not have TARGET_GROUP_<N>_WEIGHTS configured."
+                )
     
     def find_listener_rule(self, path: str) -> Optional[ListenerRule]:
         """

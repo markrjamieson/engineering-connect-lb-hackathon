@@ -5,12 +5,16 @@ Handles request forwarding and load balancing algorithms.
 import requests
 import uuid
 from flask import Request, Response
-from typing import Optional
+from typing import Optional, Dict
 from config import Config
 from target_group import TargetGroup
 from target import Target
 from error_handler import handle_error
 import time
+
+
+# Hop-by-hop headers that should not be forwarded
+HOP_BY_HOP_HEADERS = {'connection', 'keep-alive', 'transfer-encoding'}
 
 
 class LoadBalancer:
@@ -25,6 +29,10 @@ class LoadBalancer:
         """
         self.config = config
         self.round_robin_counters = {}  # Track round robin state per target group
+        self.weighted_target_lists = {}  # Cache weighted target lists per target group
+        self.weighted_counters = {}  # Track round robin state per target group
+        # Session pool per target host for connection reuse
+        self._sessions: Dict[str, requests.Session] = {}
     
     def select_target(self, target_group: TargetGroup, request: Request) -> Optional[Target]:
         """
@@ -51,12 +59,8 @@ class LoadBalancer:
         elif algorithm == 'LRT':
             return self._least_response_time(target_group, targets)
         elif algorithm == 'WEIGHTED':
-            # Not implemented yet
-            return targets[0] if targets else None
+            return self._weighted(target_group, targets)
         elif algorithm == 'STICKY':
-            # Not implemented yet
-            return targets[0] if targets else None
-        elif algorithm == 'LRT':
             # Not implemented yet
             return targets[0] if targets else None
         else:
@@ -91,9 +95,52 @@ class LoadBalancer:
         
         return target
 
+    def _weighted(self, target_group: TargetGroup, targets: list) -> Target:
+        """
+        Select the next target using weighted round-robin algorithm.
+        Targets are selected based on their weights, with higher weights
+        receiving more requests proportionally.
+        
+        Args:
+            target_group: The target group
+            targets: List of available targets
+            
+        Returns:
+            Selected target
+        """
+        group_name = target_group.name
+        
+        # Build or retrieve cached weighted target list
+        if group_name not in self.weighted_target_lists:
+            weighted_list = target_group.get_weighted_target_list()
+            if not weighted_list:
+                # Fallback to regular targets if no weights configured
+                weighted_list = targets
+            self.weighted_target_lists[group_name] = weighted_list
+        
+        weighted_list = self.weighted_target_lists[group_name]
+        
+        if not weighted_list:
+            return targets[0] if targets else None
+        
+        # Initialize counter if not exists
+        if group_name not in self.weighted_counters:
+            self.weighted_counters[group_name] = 0
+        
+        # Get current index
+        index = self.weighted_counters[group_name]
+        
+        # Select target from weighted list
+        target = weighted_list[index % len(weighted_list)]
+        
+        # Increment counter for next request
+        self.weighted_counters[group_name] = (index + 1) % len(weighted_list)
+        
+        return target
+    
     def _least_response_time(self, target_group: TargetGroup, targets: list) -> Target:
         """
-        Select the target with the lowest (active_connections * avg_ttfb / weight).
+        Select the target with the lowest (active_connections * avg_ttfb).
         If avg_ttfb is unknown (0), it's treated as a small value to prefer idle targets.
         """
         best = None
@@ -111,15 +158,40 @@ class LoadBalancer:
                 # treat unknown avg as very small to favor cold targets
                 avg = 0.001
 
-            weight = getattr(target, 'weight', 1) or 1
-
-            metric = (active * avg) / float(weight)
+            metric = active * avg
 
             if best is None or metric < best_metric:
                 best = target
                 best_metric = metric
 
         return best
+    
+    def _get_session(self, target: Target) -> requests.Session:
+        """
+        Get or create a session for the target host.
+        Sessions are reused to enable connection pooling.
+        
+        Args:
+            target: The target to get a session for
+            
+        Returns:
+            A requests.Session configured for connection pooling
+        """
+        host_port = f"{target.ip}:{target.port}"
+        if host_port not in self._sessions:
+            session = requests.Session()
+            # Disable proxy detection to avoid overhead
+            session.trust_env = False
+            # Configure connection pooling
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=10,  # Number of connection pools to cache
+                pool_maxsize=20,      # Max connections per pool
+                max_retries=0         # Disable retries for load balancer
+            )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            self._sessions[host_port] = session
+        return self._sessions[host_port]
     
     def forward_request(self, target: Target, request: Request, path: str) -> Response:
         """
@@ -134,14 +206,19 @@ class LoadBalancer:
             Response from the target or error response
         """
         try:
+            # Track connection and TTFB
+            target.inc_connections()
+            start = time.monotonic()
+            
             # Construct full URL
             url = target.get_url(path)
             
             # Prepare request headers (exclude hop-by-hop headers)
-            headers = {}
-            for key, value in request.headers:
-                if key.lower() not in ['host', 'connection', 'keep-alive', 'transfer-encoding']:
-                    headers[key] = value
+            # Use set for O(1) lookup instead of list iteration
+            headers = {
+                key: value for key, value in request.headers
+                if key.lower() not in HOP_BY_HOP_HEADERS
+            }
 
             # Add X-Forwarded-* headers when enabled
             if self.config.get_header_convention_enable():
@@ -184,10 +261,11 @@ class LoadBalancer:
             if query_string:
                 url += '?' + query_string
             
-            # Make request with timeout
+            # Make request with timeout using connection pooling
             timeout = self.config.get_connection_timeout()
+            session = self._get_session(target)
             
-            response = requests.request(
+            response = session.request(
                 method=request.method,
                 url=url,
                 headers=headers,

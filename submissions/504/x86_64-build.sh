@@ -1,3 +1,3 @@
 #!/bin/bash
 
-podman build . --arch amd64 -t example-team:latest
+podman build . --arch amd64 -t 504:latest
