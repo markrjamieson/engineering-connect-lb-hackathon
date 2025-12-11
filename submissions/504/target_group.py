@@ -63,6 +63,14 @@ class TargetGroup:
         for spec in target_specs:
             if not spec:
                 continue
+            # Allow optional weight suffix using '@', e.g. host:port/path@2
+            weight = 1
+            if '@' in spec:
+                try:
+                    spec, weight_str = spec.rsplit('@', 1)
+                    weight = int(weight_str)
+                except Exception:
+                    weight = 1
             
             # Parse hostname:port/base-uri
             # First, check if there's a base URI
@@ -91,7 +99,7 @@ class TargetGroup:
             
             # Create a target for each IP address
             for ip in ip_addresses:
-                target = Target(ip, port, base_uri)
+                target = Target(ip, port, base_uri, weight=weight)
                 targets.append(target)
         
         return targets

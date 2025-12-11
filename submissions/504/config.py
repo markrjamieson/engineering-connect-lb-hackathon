@@ -15,6 +15,7 @@ class Config:
     def __init__(self):
         self.listener_port = int(os.getenv('LISTENER_PORT', '8080'))
         self.connection_timeout = int(os.getenv('CONNECTION_TIMEOUT', '5000')) / 1000.0  # Convert ms to seconds
+        # Allowed values: ROUND_ROBIN, WEIGHTED, STICKY, LRT
         self.load_balancing_algorithm = os.getenv('LOAD_BALANCING_ALGORITHM', 'ROUND_ROBIN')
         
         # Parse listener rules

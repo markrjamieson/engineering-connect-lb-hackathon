@@ -32,7 +32,7 @@ The load balancer is configured entirely through environment variables.
   - `ROUND_ROBIN`: Evenly distributes requests in a circular pattern (implemented)
   - `WEIGHTED`: Weighted distribution (not implemented)
   - `STICKY`: Sticky sessions (not implemented)
-  - `LRT`: Least Response Time (not implemented)
+  - `LRT`: Least Response Time (implemented)
   Default: `ROUND_ROBIN`
 
 #### Target Groups
